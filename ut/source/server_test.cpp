@@ -1,7 +1,6 @@
 
 #include "server_test.h"
 #include "servo/server.h"
-#include "servo/request.h"
 #include "cppkit/os/ck_time_utils.h"
 
 using namespace std;
@@ -24,16 +23,16 @@ void server_test::test_basic()
 {
     int port = UT_NEXT_PORT();
 
-    thread t( [&]() {
-        server<request> s( port );
-        s.start( [&]( shared_ptr<ck_socket> connected ) {
-            unsigned int val = 0;
-            connected->recv( &val, 4 );
-            ++val;
-            connected->send( &val, 4 );
+    server s( port, [&s]( shared_ptr<ck_socket> connected ) {
+        unsigned int val = 0;
+        connected->recv( &val, 4 );
+        ++val;
+        connected->send( &val, 4 );
+        s.stop();
+    } );
 
-            s.stop(); // stop the server...
-        } );
+    thread t( [&]() {
+        s.start();
     } );
 
     unsigned int val = 41;
@@ -54,37 +53,34 @@ void server_test::test_interrupt_shutdown()
     int port = UT_NEXT_PORT();
 
     int numLoops = 0;
-    int done = 0;
 
-    {
-        server<request> s( port );
+    server s( port, [&]( shared_ptr<ck_socket> connected ) {
+        while( connected->valid() )
+        {
+            ++numLoops;
+            ck_usleep( 10000 );
+        }
+    } );
 
-        thread t1( [&]() {
-            s.start( [&]( shared_ptr<ck_socket> connected ) {
-                while( connected->valid() )
-                {
-                    ++numLoops;
-                    ck_usleep( 10000 );
-                }
-                ++done;
-            } );
-        } );
+    thread t( [&]() {
+        s.start();
+    } );
 
-        ck_usleep( 50000 );
+    ck_usleep( 50000 );
 
-        ck_socket clientSocket;
-        TRY_N_TIMES( clientSocket.query_connect( "127.0.0.1", port ), 20 );
+    ck_socket clientSocket;
+    TRY_N_TIMES( clientSocket.query_connect( "127.0.0.1", port ), 20 );
 
-        unsigned int val = 41;
-        clientSocket.send( &val, 4 );
+    // Only connections with data get serviced, so if we want to check numLoops we have to write
+    // something...
+    unsigned int val = 41;
+    clientSocket.send( &val, 4 );
 
-        ck_usleep( 250000 );
+    ck_usleep( 250000 );
 
-        s.stop();
+    s.stop();
 
-        t1.join();
-    }
+    t.join();
 
-    UT_ASSERT( numLoops > 1 );
-    UT_ASSERT( done == 1 );
+    UT_ASSERT( numLoops > 0 );
 }

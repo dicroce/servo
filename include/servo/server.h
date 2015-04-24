@@ -5,33 +5,55 @@
 #include "cppkit/ck_socket.h"
 #include "cppkit/ck_socket_address.h"
 #include "cppkit/ck_string.h"
+#include "cppkit/os/ck_platform.h"
 #include <mutex>
+#include <thread>
 
-template<class T>
+namespace servo
+{
+
+struct conn_context
+{
+    bool done;
+    std::shared_ptr<cppkit::ck_socket> connected;
+    std::thread th;
+};
+
 class server
 {
 public:
     CK_API server( int port,
-                   cppkit::ck_string sockAddr = cppkit::ck_string(),
-                   int32_t spinMillis = 200,
-                   std::function<void()> loopCB = nullptr ) :
+                   std::function<void(std::shared_ptr<cppkit::ck_socket>)> connCB,
+                   cppkit::ck_string sockAddr = cppkit::ck_string() ) :
         _serverSocket(),
         _port( port ),
+        _connCB( connCB ),
         _sockAddr( sockAddr ),
-        _running( false ),
-        _activeRequests(),
-        _lok(),
-        _loopCB( loopCB ),
-        _spinMillis( spinMillis )
+        _connectedContexts(),
+        _running( false )
     {
     }
 
     CK_API virtual ~server() noexcept
     {
+        for( const std::shared_ptr<conn_context>& c : _connectedContexts )
+        {
+            c->connected->close();
+            c->th.join();
+        }
     }
 
-    template<typename... Args>
-    CK_API void start( Args&&... args )
+    CK_API void stop()
+    {
+        _running = false;
+
+        FULL_MEM_BARRIER();
+
+        cppkit::ck_socket sok;
+        sok.connect( (_sockAddr.empty()) ? "127.0.0.1" : _sockAddr, _port );
+    }
+
+    CK_API void start()
     {
         try
         {
@@ -54,65 +76,39 @@ public:
         {
             try
             {
-                int timeout = _spinMillis;
-                if( !_serverSocket.wait_recv( timeout ) )
+                std::shared_ptr<struct conn_context> cc = std::make_shared<struct conn_context>();
+
+                cc->connected = _serverSocket.accept();
+
+                if( !_running )
+                    continue;
+
+                if( cc->connected->buffered_recv() )
                 {
-                    std::shared_ptr<T> req = std::make_shared<T>( std::forward<Args>(args)... );
+                    cc->done = false;
+                    cc->th = std::thread( &server::_thread_start, this, cc );
 
-                    std::shared_ptr<cppkit::ck_socket>& clientSocket = req->get_client_socket();
+                    _connectedContexts.remove_if( []( const std::shared_ptr<struct conn_context>& context )->bool {
+                        if( context->done )
+                        {
+                            context->th.join();
+                            return true;
+                        }
+                        return false;
+                    } );
 
-                    clientSocket = _serverSocket.accept();
-
-                    clientSocket->linger( 0 );
-
-                    if( !_running )
-                        continue;
-
-                    if( clientSocket->buffered_recv() )
-                    {
-                        std::unique_lock<std::recursive_mutex> g( _lok );
-
-                        _activeRequests.push_back( req );
-
-                        req->start();
-
-                        // while we have the lock held, look for any done requests and clean them up.
-                        _activeRequests.remove_if( []( const std::shared_ptr<T>& request )->bool {
-                                return request->is_done();
-                        } );
-                    }
-                }
-                else
-                {
-                    try
-                    {
-                        if( _loopCB )
-                            _loopCB();
-                    }
-                    catch( std::exception& ex )
-                    {
-                        CK_LOG_NOTICE("Exception (%s) occured in main loop callback.",ex.what());
-                    }
-                    catch( ... )
-                    {
-                        CK_LOG_NOTICE("An unknown exception has occurred in main loop callback.");
-                    }
+                    _connectedContexts.push_back( cc );
                 }
             }
             catch( std::exception& ex )
             {
-                CK_LOG_NOTICE("Exception (%s) occured while reading request.",ex.what());
+                CK_LOG_NOTICE("Exception (%s) occured while responding to connection.",ex.what());
             }
             catch( ... )
             {
-                CK_LOG_NOTICE("An unknown exception has occurred wile reading request.");
+                CK_LOG_NOTICE("An unknown exception has occurred while responding to connection.");
             }
         }
-    }
-
-    CK_API void stop()
-    {
-        _running = false;
     }
 
 private:
@@ -128,14 +124,16 @@ private:
         _serverSocket.listen();
     }
 
+    void _thread_start( std::shared_ptr<struct conn_context> cc ) { _connCB( cc->connected ); cc->done = true; }
+
     cppkit::ck_socket _serverSocket;
     int _port;
+    std::function<void(std::shared_ptr<cppkit::ck_socket>)> _connCB;
     cppkit::ck_string _sockAddr;
+    std::list<std::shared_ptr<struct conn_context> > _connectedContexts;
     bool _running;
-    std::list<std::shared_ptr<T> > _activeRequests;
-    std::recursive_mutex _lok;
-    std::function<void()> _loopCB;
-    int32_t _spinMillis;
 };
+
+}
 
 #endif
