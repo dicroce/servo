@@ -1,6 +1,6 @@
 
-#ifndef __servo_server_h
-#define __servo_server_h
+#ifndef __servo_server_threaded_h
+#define __servo_server_threaded_h
 
 #include "cppkit/ck_socket.h"
 #include "cppkit/ck_socket_address.h"
@@ -19,10 +19,10 @@ struct conn_context
     std::thread th;
 };
 
-class server
+class server_threaded
 {
 public:
-    CK_API server( int port,
+    CK_API server_threaded( int port,
                    std::function<void(std::shared_ptr<cppkit::ck_socket>)> connCB,
                    cppkit::ck_string sockAddr = cppkit::ck_string() ) :
         _serverSocket(),
@@ -34,7 +34,7 @@ public:
     {
     }
 
-    CK_API virtual ~server() noexcept
+    CK_API virtual ~server_threaded() noexcept
     {
         for( const std::shared_ptr<conn_context>& c : _connectedContexts )
         {
@@ -61,12 +61,12 @@ public:
         }
         catch( std::exception& ex )
         {
-            CK_LOG_NOTICE("Exception (%s) caught while initializing server. Exiting.", ex.what());
+            CK_LOG_NOTICE("Exception (%s) caught while initializing server_threaded. Exiting.", ex.what());
             return;
         }
         catch( ... )
         {
-            CK_LOG_NOTICE("Unknown exception caught while initializing server. Exiting.");
+            CK_LOG_NOTICE("Unknown exception caught while initializing server_threaded. Exiting.");
             return;
         }
 
@@ -86,7 +86,7 @@ public:
                 if( cc->connected->buffered_recv() )
                 {
                     cc->done = false;
-                    cc->th = std::thread( &server::_thread_start, this, cc );
+                    cc->th = std::thread( &server_threaded::_thread_start, this, cc );
 
                     _connectedContexts.remove_if( []( const std::shared_ptr<struct conn_context>& context )->bool {
                         if( context->done )
@@ -112,8 +112,8 @@ public:
     }
 
 private:
-    server( const server& ) = delete;
-    server& operator = ( const server& ) = delete;
+    server_threaded( const server_threaded& ) = delete;
+    server_threaded& operator = ( const server_threaded& ) = delete;
 
     void _configure_server_socket()
     {
