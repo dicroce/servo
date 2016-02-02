@@ -1,6 +1,6 @@
 
 #include "server_test.h"
-#include "servo/server.h"
+#include "servo/server_threaded.h"
 #include "cppkit/os/ck_time_utils.h"
 
 using namespace std;
@@ -23,7 +23,7 @@ void server_test::test_basic()
 {
     int port = UT_NEXT_PORT();
 
-    server s( port, [&s]( shared_ptr<ck_socket> connected ) {
+    server_threaded s( port, [&s]( shared_ptr<ck_socket> connected ) {
         unsigned int val = 0;
         connected->recv( &val, 4 );
         ++val;
@@ -54,7 +54,7 @@ void server_test::test_interrupt_shutdown()
 
     int numLoops = 0;
 
-    server s( port, [&]( shared_ptr<ck_socket> connected ) {
+    server_threaded s( port, [&]( shared_ptr<ck_socket> connected ) {
         while( connected->valid() )
         {
             ++numLoops;
